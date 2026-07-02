@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: yt-shorts-ai-producer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+    healthCheckPath: /
