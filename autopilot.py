@@ -1,0 +1,371 @@
+import threading
+import time
+import os
+import re
+from datetime import datetime, timezone, timedelta
+
+EST_OFFSET = timedelta(hours=-5)
+PEAK_SLOTS = [8, 12, 17]
+DAILY_LIMIT = 4
+GEN_LEAD_HOURS = 2
+
+_state = {
+    "running": False,
+    "status_msg": "Stopped",
+    "daily_uploads": 0,
+    "daily_date": "",
+    "last_generated_topic": None,
+    "next_action": None,
+    "next_action_time": None,
+    "log": [],
+    "generating": False,
+    "uploading": False,
+}
+_lock = threading.Lock()
+_thread = None
+
+
+def _est_now():
+    return datetime.now(timezone.utc) + EST_OFFSET
+
+
+def _log(msg):
+    with _lock:
+        ts = _est_now().strftime("%d %b %H:%M EST")
+        entry = {"time": ts, "msg": msg}
+        _state["log"].insert(0, entry)
+        _state["log"] = _state["log"][:60]
+    print(f"  [AutoPilot] {msg}")
+
+
+def get_state():
+    with _lock:
+        s = dict(_state)
+        s["log"] = list(_state["log"])
+        return s
+
+
+def start():
+    global _thread
+    with _lock:
+        if _state["running"]:
+            return {"ok": False, "msg": "Already running"}
+        _state["running"] = True
+        _state["status_msg"] = "Running"
+    _thread = threading.Thread(target=_run_loop, daemon=True)
+    _thread.start()
+    _log("🚀 Auto-Pilot started! 24/7 mode ON")
+    return {"ok": True}
+
+
+def stop():
+    with _lock:
+        _state["running"] = False
+        _state["status_msg"] = "Stopped"
+    _log("⏹️ Auto-Pilot stopped by user.")
+    return {"ok": True}
+
+
+def get_schedule_today():
+    now = _est_now()
+    today = now.strftime("%Y-%m-%d")
+    schedule = []
+    for peak in PEAK_SLOTS:
+        gen_hour = max(0, peak - GEN_LEAD_HOURS)
+        schedule.append({
+            "generate_at": f"{gen_hour:02d}:00 EST",
+            "upload_at": f"{peak:02d}:00 EST",
+            "status": "done" if now.hour > peak else ("active" if now.hour >= gen_hour else "pending"),
+            "slot": peak,
+        })
+    return schedule
+
+
+def get_next_upload_seconds():
+    now = _est_now()
+    hour = now.hour
+    minute = now.minute
+    second = now.second
+    for peak in PEAK_SLOTS:
+        if peak > hour:
+            diff_secs = (peak - hour) * 3600 - minute * 60 - second
+            return diff_secs
+    tomorrow_first = PEAK_SLOTS[0]
+    diff_secs = (24 - hour + tomorrow_first) * 3600 - minute * 60 - second
+    return diff_secs
+
+
+def _reset_daily_if_needed():
+    now = _est_now()
+    date_str = now.strftime("%Y-%m-%d")
+    is_new_day = False
+    with _lock:
+        if _state["daily_date"] != date_str:
+            _state["daily_date"] = date_str
+            _state["daily_uploads"] = 0
+            is_new_day = True
+    if is_new_day:
+        _log(f"📅 New day ({date_str}) — daily counter reset (0/{DAILY_LIMIT})")
+        # Naye din ki shuruat mein purani files saaf karo
+        threading.Thread(target=_daily_storage_cleanup, daemon=True).start()
+
+
+def _run_loop():
+    _log("⚙️ Auto-Pilot engine running (checks every 5 min)...")
+    while True:
+        with _lock:
+            if not _state["running"]:
+                break
+        try:
+            _reset_daily_if_needed()
+            _tick()
+        except Exception as e:
+            _log(f"❌ Loop error: {e}")
+        time.sleep(300)
+
+
+def _tick():
+    now = _est_now()
+    hour = now.hour
+
+    with _lock:
+        daily = _state["daily_uploads"]
+        is_gen = _state["generating"]
+        is_up = _state["uploading"]
+
+    if daily >= DAILY_LIMIT:
+        with _lock:
+            _state["status_msg"] = f"✅ Daily limit reached ({DAILY_LIMIT}/day). Resume tomorrow."
+            _state["next_action"] = "Tomorrow"
+        return
+
+    if hour in PEAK_SLOTS and not is_up:
+        _do_upload(hour)
+
+    should_gen = False
+    for peak in PEAK_SLOTS:
+        gen_hour = max(0, peak - GEN_LEAD_HOURS)
+        if hour == gen_hour:
+            should_gen = True
+            break
+
+    if should_gen and not is_gen and not is_up:
+        with _lock:
+            daily2 = _state["daily_uploads"]
+        if daily2 < DAILY_LIMIT:
+            threading.Thread(target=_do_generate, daemon=True).start()
+
+    _update_next_action(hour)
+
+
+def _update_next_action(hour):
+    for peak in PEAK_SLOTS:
+        gen_hour = max(0, peak - GEN_LEAD_HOURS)
+        if hour < gen_hour:
+            with _lock:
+                _state["next_action"] = f"Generate video at {gen_hour:02d}:00 EST → Upload at {peak:02d}:00 EST"
+            return
+        elif hour < peak:
+            with _lock:
+                _state["next_action"] = f"Upload queued video at {peak:02d}:00 EST"
+            return
+    with _lock:
+        next_peak = PEAK_SLOTS[0]
+        _state["next_action"] = f"Next cycle starts at {max(0, next_peak - GEN_LEAD_HOURS):02d}:00 EST tomorrow"
+
+
+def _cleanup_output_folder(safe_id: str):
+    """
+    Upload ke baad heavy files delete karo — storage free karo.
+    Rakho: full_package.json, youtube_metadata.txt, image_prompts.txt, voiceover_script.txt
+    Delete karo: shorts_video.mp4, voiceover.mp3, scene_*.jpg
+    """
+    folder = os.path.join("output", safe_id)
+    if not os.path.isdir(folder):
+        return
+
+    delete_patterns = [
+        "shorts_video.mp4",
+        "voiceover.mp3",
+    ]
+
+    freed_mb = 0.0
+    for fname in os.listdir(folder):
+        fpath = os.path.join(folder, fname)
+        should_delete = (
+            fname in delete_patterns or
+            fname.startswith("scene_") and fname.endswith(".jpg")
+        )
+        if should_delete and os.path.isfile(fpath):
+            try:
+                size_mb = os.path.getsize(fpath) / (1024 * 1024)
+                os.remove(fpath)
+                freed_mb += size_mb
+            except Exception:
+                pass
+
+    if freed_mb > 0:
+        _log(f"🗑️ Storage freed: {freed_mb:.1f} MB deleted from {safe_id}/")
+
+
+def _daily_storage_cleanup():
+    """
+    Roz midnight EST pe run hota hai.
+    Koi bhi purani video/audio/image files delete karo jo 
+    uploaded items ki hain ya 2 din se zyada purani hain.
+    """
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    output_dir = "output"
+    if not os.path.isdir(output_dir):
+        return
+
+    cutoff = _dt.now(_tz.utc) - _td(days=1)
+    freed_total = 0.0
+
+    for folder_name in os.listdir(output_dir):
+        folder_path = os.path.join(output_dir, folder_name)
+        if not os.path.isdir(folder_path):
+            continue
+
+        pkg_path = os.path.join(folder_path, "full_package.json")
+        if not os.path.exists(pkg_path):
+            continue
+
+        # Folder ka creation time check karo
+        try:
+            mtime = _dt.fromtimestamp(os.path.getmtime(pkg_path), tz=_tz.utc)
+            if mtime < cutoff:
+                for fname in os.listdir(folder_path):
+                    if (fname == "shorts_video.mp4" or
+                            fname == "voiceover.mp3" or
+                            (fname.startswith("scene_") and fname.endswith(".jpg"))):
+                        fpath = os.path.join(folder_path, fname)
+                        try:
+                            freed_total += os.path.getsize(fpath) / (1024 * 1024)
+                            os.remove(fpath)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    if freed_total > 0:
+        _log(f"🌙 Daily cleanup: {freed_total:.1f} MB freed from old output folders")
+    else:
+        _log("🌙 Daily cleanup: Storage already clean ✅")
+
+
+def _do_upload(hour):
+    from queue_manager import get_due_items, mark_as_uploaded
+    from youtube_uploader import upload_to_youtube, get_auth_status
+
+    auth = get_auth_status()
+    if auth["step"] != "ready":
+        _log("⚠️ YouTube not connected — upload skip kar raha hoon")
+        return
+
+    due = get_due_items(hour)
+    if not due:
+        _log(f"⏰ {hour:02d}:00 — Queue mein koi video nahi")
+        return
+
+    item = due[0]
+    item_id = item["id"]
+    safe_id = re.sub(r"[^a-zA-Z0-9_]", "_", item_id)
+    video_path = os.path.join("output", safe_id, "shorts_video.mp4")
+
+    if not os.path.exists(video_path):
+        _log(f"⚠️ Video file nahi mili: {safe_id}")
+        return
+
+    title = item.get("youtube_metadata", {}).get("title", "YouTube Short")
+    description = item.get("youtube_metadata", {}).get("description", "")
+    tags = item.get("youtube_metadata", {}).get("tags", [])
+
+    with _lock:
+        _state["uploading"] = True
+        _state["status_msg"] = f"📤 Uploading: '{title[:40]}...'"
+
+    _log(f"📤 Upload shuru: '{title[:50]}'")
+    result = upload_to_youtube(video_path, title, description, tags)
+
+    with _lock:
+        _state["uploading"] = False
+
+    if result["success"]:
+        mark_as_uploaded(item_id, result["url"])
+        with _lock:
+            _state["daily_uploads"] += 1
+            daily = _state["daily_uploads"]
+            _state["status_msg"] = f"✅ Running — {daily}/{DAILY_LIMIT} videos uploaded today"
+        _log(f"✅ Upload done! {result['url']} ({daily}/{DAILY_LIMIT} today)")
+
+        # ── Upload ke turant baad storage free karo ──────────────────
+        _log("🗑️ Storage cleanup — video/audio/images delete ho rahe hain...")
+        _cleanup_output_folder(safe_id)
+    else:
+        _log(f"❌ Upload fail: {result.get('error', 'Unknown error')}")
+        with _lock:
+            _state["status_msg"] = "Running — Upload fail, retry next slot"
+
+
+def _do_generate():
+    from trends import fetch_trending_topics
+    from agent import generate_autonomous_package
+    from queue_manager import save_to_queue
+    from output_generator import save_package_to_file, generate_images_pollinations, generate_voiceover_edgetts
+    from video_editor import create_shorts_video
+
+    with _lock:
+        _state["generating"] = True
+
+    try:
+        _log("🔍 USA trending topics fetch ho rahi hain...")
+        topics = fetch_trending_topics(limit=5)
+        if not topics:
+            _log("❌ Koi trending topic nahi mila")
+            return
+        topic = topics[0]
+        _log(f"🔥 Topic selected: '{topic}'")
+
+        with _lock:
+            _state["status_msg"] = f"🤖 Generating video: '{topic[:40]}'"
+            _state["last_generated_topic"] = topic
+
+        _log("🤖 AI se package generate ho raha hai...")
+        ai_package = generate_autonomous_package(topic)
+        item_id = save_to_queue(topic, ai_package)
+        save_package_to_file(item_id, ai_package, topic)
+
+        title = ai_package.get("youtube_metadata", {}).get("title", "")
+        _log(f"📝 Script ready: '{title[:50]}'")
+
+        _log("🖼️ 7 cinematic images download ho rahi hain...")
+        prompts = ai_package.get("production_assets", {}).get("image_prompts", [])
+        images = generate_images_pollinations(prompts, item_id)
+        _log(f"✅ {len(images)}/7 images ready")
+
+        _log("🎙️ Voiceover generate ho raha hai...")
+        script = ai_package.get("production_assets", {}).get("voiceover_script", "")
+        audio = generate_voiceover_edgetts(script, item_id)
+
+        if images:
+            safe_id = re.sub(r"[^a-zA-Z0-9_]", "_", item_id)
+            folder = os.path.join("output", safe_id)
+            _log("🎬 FFmpeg se video edit ho raha hai...")
+            create_shorts_video(item_id, images, audio, title, folder)
+            _log(f"🎉 Video ready! Upload next peak slot pe hogi.")
+        else:
+            _log("⚠️ Images nahi aayi — video skip")
+
+        with _lock:
+            _state["status_msg"] = "Running — Video ready, upload queue mein hai"
+
+    except Exception as e:
+        _log(f"❌ Generate error: {e}")
+        with _lock:
+            _state["status_msg"] = f"Running — Error: {str(e)[:60]}"
+    finally:
+        with _lock:
+            _state["generating"] = False

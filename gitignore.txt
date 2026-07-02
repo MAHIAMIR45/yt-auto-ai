@@ -1,0 +1,9 @@
+data/youtube_tokens.json
+data/youtube_oauth_creds.json
+output/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store
+*.log
