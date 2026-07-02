@@ -13,10 +13,14 @@ OUTPUT_DIR = "output"
 # turbo         → faster, slightly lower quality
 POLLINATIONS_MODEL = "flux-realism"
 
+# ✅ Memory fix: 720x1280 download (YouTube Shorts ke liye perfect, ~60% less storage vs 1080x1920)
+IMG_WIDTH  = 720
+IMG_HEIGHT = 1280
+
 # Universal cinematic quality suffix appended to every prompt
 QUALITY_SUFFIX = (
     ", ultra photorealistic, shot on RED MONSTRO cinema camera, "
-    "8K resolution, ultra sharp detail, professional color grading, "
+    "professional color grading, "
     "anamorphic lens flare, vertical 9:16 portrait format, "
     "no text, no watermark, no letters, no words, no captions"
 )
@@ -97,7 +101,7 @@ def generate_images_pollinations(image_prompts: list, item_id: str,
                 url = (
                     f"https://image.pollinations.ai/prompt/{encoded}"
                     f"?model={POLLINATIONS_MODEL}"
-                    f"&width=1080&height=1920"
+                    f"&width={IMG_WIDTH}&height={IMG_HEIGHT}"
                     f"&nologo=true&enhance=true"
                     f"&seed={seed}"
                 )
@@ -144,7 +148,7 @@ def generate_images_pollinations(image_prompts: list, item_id: str,
                 fallback_url = (
                     f"https://image.pollinations.ai/prompt/{encoded}"
                     f"?model=flux"
-                    f"&width=1080&height=1920"
+                    f"&width={IMG_WIDTH}&height={IMG_HEIGHT}"
                     f"&nologo=true&seed={i*999}"
                 )
                 resp = requests.get(fallback_url, timeout=120, stream=True)
