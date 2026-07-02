@@ -368,47 +368,122 @@ def _do_generate():
     from output_generator import save_package_to_file, generate_images_pollinations, generate_voiceover_edgetts
     from video_editor import create_shorts_video
 
+    _CKPT_PATH = "data/gen_checkpoint.json"
+
+    def _save_ckpt(data: dict):
+        try:
+            with open(_CKPT_PATH, "w") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    def _load_ckpt() -> dict:
+        try:
+            if os.path.exists(_CKPT_PATH):
+                with open(_CKPT_PATH) as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _clear_ckpt():
+        try:
+            if os.path.exists(_CKPT_PATH):
+                os.remove(_CKPT_PATH)
+        except Exception:
+            pass
+
     with _lock:
         _state["generating"] = True
 
     try:
-        _log("🔍 USA trending topics fetch ho rahi hain...")
-        topics = fetch_trending_topics(limit=5)
-        if not topics:
-            _log("❌ Koi trending topic nahi mila")
-            return
-        topic = topics[0]
-        _log(f"🔥 Topic selected: '{topic}'")
+        # ── CHECKPOINT: kya pehle se koi incomplete job hai? ──────────────
+        ckpt = _load_ckpt()
+        item_id = ckpt.get("item_id")
+        topic   = ckpt.get("topic")
+        step    = ckpt.get("step", "start")   # start / images / voiceover / video
 
-        with _lock:
-            _state["status_msg"] = f"🤖 Generating video: '{topic[:40]}'"
-            _state["last_generated_topic"] = topic
-
-        _log("🤖 AI se package generate ho raha hai...")
-        ai_package = generate_autonomous_package(topic)
-        item_id = save_to_queue(topic, ai_package)
-        save_package_to_file(item_id, ai_package, topic)
-
-        title = ai_package.get("youtube_metadata", {}).get("title", "")
-        _log(f"📝 Script ready: '{title[:50]}'")
-
-        _log("🖼️ 7 cinematic images download ho rahi hain...")
-        prompts = ai_package.get("production_assets", {}).get("image_prompts", [])
-        images = generate_images_pollinations(prompts, item_id)
-        _log(f"✅ {len(images)}/7 images ready")
-
-        _log("🎙️ Voiceover generate ho raha hai...")
-        script = ai_package.get("production_assets", {}).get("voiceover_script", "")
-        audio = generate_voiceover_edgetts(script, item_id)
-
-        if images:
-            safe_id = re.sub(r"[^a-zA-Z0-9_]", "_", item_id)
-            folder = os.path.join("output", safe_id)
-            _log("🎬 FFmpeg se video edit ho raha hai...")
-            create_shorts_video(item_id, images, audio, title, folder)
-            _log(f"🎉 Video ready! Upload next peak slot pe hogi.")
+        if item_id and topic and step != "start":
+            _log(f"🔄 Checkpoint mila! Resume: '{topic[:40]}' (step: {step})")
         else:
-            _log("⚠️ Images nahi aayi — video skip")
+            # Fresh start
+            _log("🔍 USA trending topics fetch ho rahi hain...")
+            topics = fetch_trending_topics(limit=5)
+            if not topics:
+                _log("❌ Koi trending topic nahi mila")
+                return
+            topic = topics[0]
+            _log(f"🔥 Topic selected: '{topic}'")
+
+            with _lock:
+                _state["status_msg"] = f"🤖 Generating video: '{topic[:40]}'"
+                _state["last_generated_topic"] = topic
+
+            _log("🤖 AI se package generate ho raha hai...")
+            ai_package = generate_autonomous_package(topic)
+            item_id = save_to_queue(topic, ai_package)
+            save_package_to_file(item_id, ai_package, topic)
+            _save_ckpt({"item_id": item_id, "topic": topic, "step": "images"})
+            step = "images"
+            title = ai_package.get("youtube_metadata", {}).get("title", "")
+            _log(f"📝 Script ready: '{title[:50]}'")
+
+        safe_id = re.sub(r"[^a-zA-Z0-9_]", "_", item_id)
+        folder  = os.path.join("output", safe_id)
+
+        # Title load karo checkpoint ke baad ke steps ke liye
+        pkg_path = os.path.join(folder, "full_package.json")
+        title = ""
+        try:
+            with open(pkg_path) as f:
+                pkg_data = json.load(f)
+            title = pkg_data.get("package", {}).get("youtube_metadata", {}).get("title", "")
+            prompts = pkg_data.get("package", {}).get("production_assets", {}).get("image_prompts", [])
+            script  = pkg_data.get("package", {}).get("production_assets", {}).get("voiceover_script", "")
+        except Exception:
+            prompts, script = [], ""
+
+        # ── STEP: Images ─────────────────────────────────────────────────
+        if step == "images":
+            n_imgs = len(prompts)
+            _log(f"🖼️ {n_imgs} cinematic images download ho rahi hain (memory-safe)...")
+            images = generate_images_pollinations(prompts, item_id)
+            _log(f"✅ {len(images)}/{n_imgs} images ready")
+            _save_ckpt({"item_id": item_id, "topic": topic, "step": "voiceover"})
+            step = "voiceover"
+
+        # ── STEP: Voiceover ──────────────────────────────────────────────
+        audio_path = os.path.join(folder, "voiceover.mp3")
+        if step == "voiceover":
+            _log("🎙️ Voiceover generate ho raha hai...")
+            audio = generate_voiceover_edgetts(script, item_id)
+            _save_ckpt({"item_id": item_id, "topic": topic, "step": "video"})
+            step = "video"
+        else:
+            audio = audio_path if os.path.exists(audio_path) else ""
+
+        # ── STEP: Video ──────────────────────────────────────────────────
+        if step == "video":
+            # Existing images check karo (images already deleted ho sakti hain agar resume)
+            existing_imgs = sorted([
+                os.path.join(folder, f)
+                for f in os.listdir(folder)
+                if f.startswith("scene_") and f.endswith(".jpg")
+            ]) if os.path.isdir(folder) else []
+
+            if existing_imgs:
+                _log("🎬 FFmpeg se video edit ho raha hai (low-memory mode)...")
+                create_shorts_video(item_id, existing_imgs, audio, title, folder)
+                _log("🎉 Video ready! Upload next peak slot pe hogi.")
+                _clear_ckpt()
+            else:
+                video_path = os.path.join(folder, "shorts_video.mp4")
+                if os.path.exists(video_path):
+                    _log("✅ Video already exists (restart recovery)")
+                    _clear_ckpt()
+                else:
+                    _log("⚠️ Images nahi mili — images step se restart...")
+                    _save_ckpt({"item_id": item_id, "topic": topic, "step": "images"})
 
         with _lock:
             _state["status_msg"] = "Running — Video ready, upload queue mein hai"
