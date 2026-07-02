@@ -13,4 +13,7 @@ services:
         sync: false
       - key: YOUTUBE_CLIENT_SECRET
         sync: false
+      - key: YOUTUBE_TOKENS
+        sync: false
     healthCheckPath: /
+    
