@@ -459,6 +459,23 @@ input,select,textarea{font-family:inherit}
 
 <!-- ══════════ SETTINGS ══════════ -->
 <div class="tab-body" id="tab-settings">
+
+  <!-- 🚨 RESTART-SAFE WARNING BANNER -->
+  <div id="restartWarnBanner" style="display:none;background:rgba(233,69,96,.12);border:2px solid rgba(233,69,96,.5);border-radius:var(--radius);padding:14px 16px;margin-bottom:16px">
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <div style="font-size:1.4rem;flex-shrink:0">🚨</div>
+      <div style="flex:1">
+        <div style="font-size:.85rem;font-weight:800;color:#e94560;margin-bottom:4px">RENDER RESTART PROBLEM — Action Zaroor Lena Hai!</div>
+        <div style="font-size:.75rem;color:#e2e8f0;line-height:1.6;margin-bottom:10px">
+          <strong style="color:#fbbf24">YOUTUBE_TOKENS</strong> env var Render pe set nahi hai.<br>
+          Har restart pe YouTube logout ho jaata hai aur Auto-Pilot ruk jaata hai.<br>
+          Neeche "YouTube Token — Render Restart Fix" section mein jaao aur token copy karke Render pe save karo.
+        </div>
+        <button class="btn btn-red btn-sm" onclick="scrollToTokenFix()">🔧 Fix Karo Abhi →</button>
+      </div>
+    </div>
+  </div>
+
   <div class="grid-2">
 
     <!-- LEFT COL -->
@@ -520,11 +537,24 @@ input,select,textarea{font-family:inherit}
         </div>
 
         <!-- PHASE 2 — success -->
-        <div id="phase2" style="display:none;text-align:center;padding:20px 0">
-          <div style="font-size:3rem;margin-bottom:10px">🎉</div>
-          <h3 style="color:var(--green);font-size:1.1rem;margin-bottom:6px">YouTube Connected!</h3>
-          <p style="color:var(--muted);font-size:.8rem">Ab Auto-Pilot videos automatically upload karega.</p>
-          <button class="btn btn-green" style="margin-top:14px" onclick="checkYTConn();resetAuthPhase()">✅ Done</button>
+        <div id="phase2" style="display:none;padding:16px 0">
+          <div style="text-align:center;margin-bottom:14px">
+            <div style="font-size:2.5rem;margin-bottom:6px">🎉</div>
+            <h3 style="color:var(--green);font-size:1.1rem;margin-bottom:4px">YouTube Connected!</h3>
+            <p style="color:var(--muted);font-size:.78rem">Ab Auto-Pilot videos automatically upload karega.</p>
+          </div>
+          <!-- TOKEN BACKUP BOX -->
+          <div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.3);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px">
+            <p style="font-size:.7rem;color:#fbbf24;font-weight:700;margin-bottom:6px">⚠️ ZAROORI — Render Restart Fix</p>
+            <p style="font-size:.68rem;color:var(--muted);line-height:1.5;margin-bottom:8px">
+              Yeh token copy karo aur Render Dashboard → Environment Variables mein<br>
+              <strong style="color:#fff">YOUTUBE_TOKENS</strong> naam se paste karo.<br>
+              Iske baad restart pe bhi YouTube connected rahega! 🔒
+            </p>
+            <div style="background:var(--bg0);border:1px solid var(--border2);border-radius:6px;padding:8px;font-family:monospace;font-size:.6rem;color:var(--blue);word-break:break-all;max-height:60px;overflow-y:auto;margin-bottom:8px" id="tokenBackupBox">Loading...</div>
+            <button class="btn btn-red btn-full btn-sm" onclick="copyTokenBackup()">📋 Copy Token (Render ke liye)</button>
+          </div>
+          <button class="btn btn-green btn-full" onclick="checkYTConn();resetAuthPhase()">✅ Done</button>
         </div>
       </div>
     </div>
@@ -607,6 +637,35 @@ input,select,textarea{font-family:inherit}
         </div>
       </div>
 
+      <!-- YOUTUBE TOKEN BACKUP/RESTORE -->
+      <div class="panel" data-token-fix>
+        <div class="panel-hd"><span class="ico">🔒</span> YouTube Token — Render Restart Fix</div>
+        <p style="color:var(--muted);font-size:.75rem;line-height:1.6;margin-bottom:10px">
+          Render pe restart hone ke baad bhi YouTube connected rahe — token backup karo.
+        </p>
+        <!-- Export -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:.68rem;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:1px">Step 1 — Token Copy karo</div>
+          <button class="btn btn-ghost btn-full btn-sm" onclick="fetchAndShowToken()">📤 Get My Token</button>
+          <div id="exportTokenBox" style="display:none;margin-top:8px;background:var(--bg0);border:1px solid var(--border2);border-radius:6px;padding:8px;font-family:monospace;font-size:.58rem;color:var(--blue);word-break:break-all;max-height:70px;overflow-y:auto"></div>
+          <button id="copyExportBtn" class="btn btn-red btn-full btn-sm" style="display:none;margin-top:6px" onclick="copyExportToken()">📋 Copy Token</button>
+        </div>
+        <div style="background:rgba(96,165,250,.06);border:1px solid rgba(96,165,250,.2);border-radius:var(--radius-sm);padding:8px;margin-bottom:12px">
+          <p style="font-size:.68rem;color:var(--blue);line-height:1.5">
+            ℹ️ <strong>Step 2</strong> — Token copy karo → Render Dashboard → <strong>Environment</strong> tab → Variable naam: <strong>YOUTUBE_TOKENS</strong> → Paste karo → Save
+          </p>
+        </div>
+        <!-- Import -->
+        <div style="border-top:1px solid var(--border2);padding-top:12px">
+          <div style="font-size:.68rem;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:1px">Token Restore (naya deploy ke baad)</div>
+          <textarea class="input" id="importTokenInput" rows="2"
+            placeholder="Apna YOUTUBE_TOKENS value yahan paste karo..."
+            style="font-family:monospace;font-size:.65rem;resize:none"></textarea>
+          <button class="btn btn-green btn-full btn-sm" style="margin-top:6px" onclick="importToken()">🔄 Restore Token</button>
+          <div class="smsg" id="importTokenMsg" style="margin-top:6px"></div>
+        </div>
+      </div>
+
       <!-- AUTO-PILOT CONFIG -->
       <div class="panel">
         <div class="panel-hd"><span class="ico">⚙️</span> Auto-Pilot Config</div>
@@ -680,7 +739,7 @@ function switchTab(name) {
   if (name === 'trending') loadTrends();
   if (name === 'videos') loadVideos();
   if (name === 'manual') { loadVideos(); loadQueue(); }
-  if (name === 'settings') checkYTConn();
+  if (name === 'settings') { checkYTConn(); checkEnvTokenStatus(); }
   if (name === 'schedule') loadSchedule();
 }
 
@@ -950,6 +1009,26 @@ let _pollInterval = null;
 let _pollCountdown = 5;
 let _pollProgress = 0;
 
+async function checkEnvTokenStatus() {
+  try {
+    const d = await fetch('/api/youtube/env-token-status').then(r => r.json());
+    const banner = document.getElementById('restartWarnBanner');
+    if (banner) {
+      if (!d.restart_safe && d.file_token_exists) {
+        banner.style.display = 'block';
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+  } catch(e) {}
+}
+
+function scrollToTokenFix() {
+  const el = document.querySelector('[data-token-fix]');
+  if (el) el.scrollIntoView({behavior:'smooth', block:'start'});
+  else window.scrollTo({top: document.body.scrollHeight, behavior:'smooth'});
+}
+
 async function checkYTConn() {
   const box = document.getElementById('ytConnBox');
   const dot = document.getElementById('ytConnDot');
@@ -960,6 +1039,7 @@ async function checkYTConn() {
       box.className = 'conn-box ok';
       dot.className = 'conn-dot g';
       txt.innerHTML = '✅ <b>YouTube Connected</b> — Auto upload ready hai!';
+      checkEnvTokenStatus();
     } else if (d.step === 'no_creds') {
       box.className = 'conn-box fail';
       dot.className = 'conn-dot r';
@@ -1071,10 +1151,15 @@ async function doPoll() {
 
     if (d.success) {
       stopAutoPoll();
-      // Show phase 2 (success)
       document.getElementById('phase1').style.display = 'none';
       document.getElementById('phase2').style.display = 'block';
       checkYTConn();
+      // Token backup box mein token dikhao
+      if (d.token_b64) {
+        document.getElementById('tokenBackupBox').textContent = d.token_b64;
+      } else {
+        fetchTokenBackup();
+      }
     } else if (!d.pending) {
       // Expired or error
       stopAutoPoll();
@@ -1099,6 +1184,82 @@ function copyCode() {
 
 function copyText(txt) {
   navigator.clipboard.writeText(txt).catch(() => {});
+}
+
+async function fetchAndShowToken() {
+  try {
+    const r = await fetch('/api/youtube/export-token');
+    const d = await r.json();
+    const box = document.getElementById('exportTokenBox');
+    const btn = document.getElementById('copyExportBtn');
+    if (d.token_b64) {
+      box.textContent = d.token_b64;
+      box.style.display = 'block';
+      btn.style.display = 'block';
+    } else {
+      box.textContent = '❌ Token nahi mila — pehle YouTube connect karo.';
+      box.style.display = 'block';
+    }
+  } catch(e) {}
+}
+
+function copyExportToken() {
+  const box = document.getElementById('exportTokenBox');
+  const btn = document.getElementById('copyExportBtn');
+  if (!box) return;
+  navigator.clipboard.writeText(box.textContent.trim()).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✅ Copied! Render pe YOUTUBE_TOKENS mein paste karo.';
+    setTimeout(() => { btn.textContent = orig; }, 2500);
+  }).catch(() => { box.style.userSelect = 'all'; });
+}
+
+async function fetchTokenBackup() {
+  try {
+    const r = await fetch('/api/youtube/export-token');
+    const d = await r.json();
+    if (d.token_b64) {
+      const box = document.getElementById('tokenBackupBox');
+      if (box) box.textContent = d.token_b64;
+    }
+  } catch(e) {}
+}
+
+function copyTokenBackup() {
+  const box = document.getElementById('tokenBackupBox');
+  if (!box) return;
+  const txt = box.textContent.trim();
+  if (!txt || txt === 'Loading...') return;
+  navigator.clipboard.writeText(txt).then(() => {
+    box.style.color = 'var(--green)';
+    const origTxt = box.textContent;
+    box.textContent = '✅ Copied! Ab Render pe YOUTUBE_TOKENS mein paste karo.';
+    setTimeout(() => { box.textContent = origTxt; box.style.color = ''; }, 2500);
+  }).catch(() => {
+    box.style.userSelect = 'all';
+    box.focus();
+  });
+}
+
+async function importToken() {
+  const val = document.getElementById('importTokenInput').value.trim();
+  const msg = document.getElementById('importTokenMsg');
+  if (!val) { msg.className='smsg err'; msg.textContent='Token string khali hai!'; return; }
+  msg.className='smsg'; msg.textContent='Importing...';
+  try {
+    const r = await fetch('/api/youtube/import-token', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({token_b64: val})
+    });
+    const d = await r.json();
+    if (d.success) {
+      msg.className='smsg ok'; msg.textContent='✅ Token import ho gaya! YouTube connected.';
+      document.getElementById('importTokenInput').value = '';
+      checkYTConn();
+    } else {
+      msg.className='smsg err'; msg.textContent='❌ ' + (d.error||'Invalid token');
+    }
+  } catch(e) { msg.className='smsg err'; msg.textContent='❌ Network error'; }
 }
 
 function resetAuthPhase() {
@@ -1425,6 +1586,37 @@ def api_verify_auth():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+@app.route("/api/youtube/export-token")
+def api_export_token():
+    from youtube_uploader import export_tokens_b64
+    b64 = export_tokens_b64()
+    if b64:
+        return jsonify({"success": True, "token_b64": b64})
+    return jsonify({"success": False, "error": "Token nahi mila — pehle authorize karo."})
+
+@app.route("/api/youtube/import-token", methods=["POST"])
+def api_import_token():
+    data = request.json or {}
+    b64  = data.get("token_b64", "").strip()
+    if not b64:
+        return jsonify({"success": False, "error": "token_b64 required"})
+    from youtube_uploader import import_tokens_b64
+    ok = import_tokens_b64(b64)
+    if ok:
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Invalid token — dobara copy karo."})
+
+@app.route("/api/youtube/env-token-status")
+def api_env_token_status():
+    """Check karo YOUTUBE_TOKENS env var Render pe set hai ya nahi."""
+    has_env_token = bool(os.environ.get("YOUTUBE_TOKENS", "").strip())
+    has_file_token = os.path.exists("data/youtube_tokens.json")
+    return jsonify({
+        "env_token_set": has_env_token,
+        "file_token_exists": has_file_token,
+        "restart_safe": has_env_token,
+    })
+
 @app.route("/api/cookies/verify")
 def api_cookies_verify():
     from youtube_uploader import verify_cookies
@@ -1480,6 +1672,22 @@ def api_test_cf_creds():
         return jsonify({"success": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+def _on_startup():
+    """Server start hone pe auto-resume karo."""
+    try:
+        from autopilot import auto_resume
+        resumed = auto_resume()
+        if resumed:
+            print("[Startup] ✅ Auto-Pilot auto-resumed after restart")
+        else:
+            print("[Startup] ℹ️ Auto-Pilot was stopped — waiting for manual start")
+    except Exception as e:
+        print(f"[Startup] Auto-resume error: {e}")
+
+
+_on_startup()
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
