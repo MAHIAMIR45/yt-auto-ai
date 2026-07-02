@@ -5,6 +5,12 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     envVars:
-      - key: OPENROUTER_API_KEY
+      - key: CF_ACCOUNT_ID
+        sync: false
+      - key: CF_API_TOKEN
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
         sync: false
     healthCheckPath: /
