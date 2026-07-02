@@ -44,6 +44,8 @@ def create_shorts_video(item_id: str, images: list, audio_path: str, title: str,
     else:
         seg_dur = 8
 
+    fps = 24  # ✅ Memory fix: 30→24 fps (YouTube Shorts ke liye kaafi, ~20% less memory)
+
     print(f"  [Video] {n} images × {seg_dur}s per clip — Ken Burns effect...")
     clip_files = []
 
@@ -59,6 +61,12 @@ def create_shorts_video(item_id: str, images: list, audio_path: str, title: str,
             ok2 = _make_static_clip(img_path, clip_out, seg_dur, fps)
             if ok2:
                 clip_files.append(clip_out)
+        # ✅ Memory fix: image use ho gayi, delete karo — RAM free karo
+        try:
+            if os.path.exists(img_path):
+                os.remove(img_path)
+        except Exception:
+            pass
 
     if not clip_files:
         print("  [Video] Koi clip nahi bana.")
@@ -96,32 +104,33 @@ def _make_ken_burns_clip(img_path: str, out_path: str, duration: int, fps: int, 
     frames = duration * fps
 
     if zoom_in:
-        zoom_expr = "min(zoom+0.0015,1.4)"
+        zoom_expr = "min(zoom+0.0015,1.3)"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
     else:
-        zoom_expr = "if(eq(on,1),1.4,max(zoom-0.0015,1.001))"
+        zoom_expr = "if(eq(on,1),1.3,max(zoom-0.0015,1.001))"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
 
+    # ✅ Memory fix: 1080x1920 scale ONLY (no 4K intermediate — was killing 512MB RAM)
     vf = (
-        f"scale=2160:3840:force_original_aspect_ratio=increase,"
-        f"crop=2160:3840,"
+        f"scale=1080:1920:force_original_aspect_ratio=increase,"
+        f"crop=1080:1920,"
         f"setsar=1,"
         f"zoompan=z='{zoom_expr}':d={frames}:x='{x_expr}':y='{y_expr}':s=1080x1920:fps={fps},"
         f"trim=duration={duration},"
-        f"setpts=PTS-STARTPTS,"
-        f"scale=1080:1920:flags=lanczos"
+        f"setpts=PTS-STARTPTS"
     )
 
     cmd = [
         "ffmpeg", "-y",
+        "-threads", "2",                  # ✅ Memory fix: thread limit
         "-loop", "1", "-t", str(duration + 2), "-i", img_path,
         "-vf", vf,
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "18",
-        "-profile:v", "high",
+        "-preset", "veryfast",            # ✅ Memory fix: was 'medium'
+        "-crf", "26",                     # ✅ Memory fix: was '18' (good quality, much less RAM)
+        "-profile:v", "baseline",         # ✅ Memory fix: simpler profile
         "-level:v", "4.0",
         "-pix_fmt", "yuv420p",
         "-t", str(duration),
@@ -132,7 +141,7 @@ def _make_ken_burns_clip(img_path: str, out_path: str, duration: int, fps: int, 
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if result.returncode != 0:
-        print(f"    zoompan error: {result.stderr[-400:]}")
+        print(f"    zoompan error: {result.stderr[-300:]}")
         return False
     return os.path.exists(out_path) and os.path.getsize(out_path) > 1000
 
@@ -140,12 +149,13 @@ def _make_ken_burns_clip(img_path: str, out_path: str, duration: int, fps: int, 
 def _make_static_clip(img_path: str, out_path: str, duration: int, fps: int) -> bool:
     cmd = [
         "ffmpeg", "-y",
+        "-threads", "2",
         "-loop", "1", "-t", str(duration), "-i", img_path,
-        "-vf", f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps={fps},scale=1080:1920:flags=lanczos",
+        "-vf", f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps={fps}",
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "18",
-        "-profile:v", "high",
+        "-preset", "veryfast",
+        "-crf", "26",
+        "-profile:v", "baseline",
         "-level:v", "4.0",
         "-pix_fmt", "yuv420p",
         "-t", str(duration),
@@ -159,7 +169,7 @@ def _make_static_clip(img_path: str, out_path: str, duration: int, fps: int) -> 
 def _xfade_merge(clip_files: list, out_path: str, fps: int, seg_dur: int, xfade_dur: int = 1) -> bool:
     n = len(clip_files)
 
-    cmd = ["ffmpeg", "-y"]
+    cmd = ["ffmpeg", "-y", "-threads", "2"]
     for cf in clip_files:
         cmd += ["-i", cf]
 
@@ -183,9 +193,9 @@ def _xfade_merge(clip_files: list, out_path: str, fps: int, seg_dur: int, xfade_
 
     cmd += [
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "18",
-        "-profile:v", "high",
+        "-preset", "veryfast",      # ✅ Memory fix: was 'medium'
+        "-crf", "26",               # ✅ Memory fix: was '18'
+        "-profile:v", "baseline",   # ✅ Memory fix: was 'high'
         "-level:v", "4.0",
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
