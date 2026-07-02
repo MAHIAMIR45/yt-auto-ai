@@ -2,12 +2,15 @@ import threading
 import time
 import os
 import re
+import json
 from datetime import datetime, timezone, timedelta
 
 EST_OFFSET = timedelta(hours=-5)
 PEAK_SLOTS = [8, 12, 17]
 DAILY_LIMIT = 4
 GEN_LEAD_HOURS = 2
+
+_PERSIST_PATH = "data/autopilot_state.json"
 
 _state = {
     "running": False,
@@ -23,6 +26,51 @@ _state = {
 }
 _lock = threading.Lock()
 _thread = None
+
+
+def _save_persist_state():
+    """Disk pe save karo — restart ke baad bhi state yaad rahe."""
+    try:
+        os.makedirs("data", exist_ok=True)
+        with _lock:
+            data = {
+                "running": _state["running"],
+                "daily_uploads": _state["daily_uploads"],
+                "daily_date": _state["daily_date"],
+            }
+        with open(_PERSIST_PATH, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def _load_persist_state() -> dict:
+    """Disk se saved state load karo."""
+    try:
+        if os.path.exists(_PERSIST_PATH):
+            with open(_PERSIST_PATH) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def auto_resume():
+    """
+    Server restart ke baad call karo.
+    Agar pehle se Auto-Pilot ON tha, automatically restart ho jaata hai.
+    """
+    saved = _load_persist_state()
+    if saved.get("running"):
+        today = (datetime.now(timezone.utc) + EST_OFFSET).strftime("%Y-%m-%d")
+        with _lock:
+            if saved.get("daily_date") == today:
+                _state["daily_uploads"] = saved.get("daily_uploads", 0)
+                _state["daily_date"] = today
+        print("[AutoPilot] 🔄 Server restart detected — Auto-Pilot auto-resuming...")
+        start()
+        return True
+    return False
 
 
 def _est_now():
@@ -52,6 +100,7 @@ def start():
             return {"ok": False, "msg": "Already running"}
         _state["running"] = True
         _state["status_msg"] = "Running"
+    _save_persist_state()
     _thread = threading.Thread(target=_run_loop, daemon=True)
     _thread.start()
     _log("🚀 Auto-Pilot started! 24/7 mode ON")
@@ -62,6 +111,7 @@ def stop():
     with _lock:
         _state["running"] = False
         _state["status_msg"] = "Stopped"
+    _save_persist_state()
     _log("⏹️ Auto-Pilot stopped by user.")
     return {"ok": True}
 
@@ -105,8 +155,8 @@ def _reset_daily_if_needed():
             _state["daily_uploads"] = 0
             is_new_day = True
     if is_new_day:
+        _save_persist_state()
         _log(f"📅 New day ({date_str}) — daily counter reset (0/{DAILY_LIMIT})")
-        # Naye din ki shuruat mein purani files saaf karo
         threading.Thread(target=_daily_storage_cleanup, daemon=True).start()
 
 
@@ -299,6 +349,7 @@ def _do_upload(hour):
             _state["daily_uploads"] += 1
             daily = _state["daily_uploads"]
             _state["status_msg"] = f"✅ Running — {daily}/{DAILY_LIMIT} videos uploaded today"
+        _save_persist_state()
         _log(f"✅ Upload done! {result['url']} ({daily}/{DAILY_LIMIT} today)")
 
         # ── Upload ke turant baad storage free karo ──────────────────
